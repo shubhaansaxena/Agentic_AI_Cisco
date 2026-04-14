@@ -116,7 +116,6 @@ def score_net_annual_benefit(
 # ──────────────────────────────────────────────
 # TOOL 3: Write recommendation to BigQuery
 # ──────────────────────────────────────────────
-
 def bq_write_recommendation(
     run_id: str,
     product_family: str,
@@ -124,26 +123,96 @@ def bq_write_recommendation(
     band: str,
     net_benefit_usd: float,
     top_drivers: list,
-    explanation: str
+    explanation: str,
+    annualized_volume: int = 0,
+    avg_replace_unit_cost: float = 0.0,
+    avg_repair_cost: float = 0.0,
+    per_unit_delta: float = 0.0,
+    gross_annual_savings: float = 0.0,
+    risk_buffer: float = 0.0,
+    fixed_enablement_cost: float = 0.0,
 ) -> dict:
-    """Write a recommendation row to the BigQuery output table."""
-    row = {
-        "run_id": run_id,
-        "product_family": product_family,
-        "decision": decision,
-        "band": band,
-        "net_benefit_usd": net_benefit_usd,
-        "top_drivers": top_drivers,
-        "explanation": explanation,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    """
+    Write a recommendation to the recommendations table AND upsert the
+    corresponding row into opportunity_scores so the dashboard reflects it.
+    """
+    # 1. Append to recommendations (audit log of every agent run)
+    client.query(
+        f"""
+        INSERT INTO `{config.TABLE_RECOMMENDATIONS}`
+        (run_id, product_family, decision, band, net_benefit_usd, top_drivers, explanation, created_at)
+        VALUES (@run_id, @pf, @decision, @band, @net, @drivers, @explanation, CURRENT_TIMESTAMP())
+        """,
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("run_id", "STRING", run_id),
+            bigquery.ScalarQueryParameter("pf", "STRING", product_family),
+            bigquery.ScalarQueryParameter("decision", "STRING", decision),
+            bigquery.ScalarQueryParameter("band", "STRING", band),
+            bigquery.ScalarQueryParameter("net", "FLOAT64", net_benefit_usd),
+            bigquery.ArrayQueryParameter("drivers", "STRING", top_drivers),
+            bigquery.ScalarQueryParameter("explanation", "STRING", explanation),
+        ])
+    ).result()
+    # 2. Upsert into opportunity_scores via MERGE (delete-old + insert-new semantics)
+    merge_query = f"""
+    MERGE `{config.TABLE_SCORES}` T
+    USING (
+      SELECT
+        @run_id AS run_id,
+        @pf AS product_family,
+        @volume AS annualized_volume,
+        @replace_cost AS avg_replace_unit_cost,
+        @repair_cost AS avg_repair_cost,
+        @delta AS per_unit_delta,
+        @gross AS gross_annual_savings,
+        @risk AS risk_buffer,
+        @fixed AS fixed_enablement_cost,
+        @net AS net_annual_benefit,
+        @band AS band,
+        @decision AS decision,
+        TRUE AS sufficiency_pass,
+        @drivers AS top_drivers,
+        CURRENT_TIMESTAMP() AS created_at
+    ) S
+    ON T.product_family = S.product_family
+    WHEN MATCHED THEN UPDATE SET
+      run_id = S.run_id,
+      annualized_volume = S.annualized_volume,
+      avg_replace_unit_cost = S.avg_replace_unit_cost,
+      avg_repair_cost = S.avg_repair_cost,
+      per_unit_delta = S.per_unit_delta,
+      gross_annual_savings = S.gross_annual_savings,
+      risk_buffer = S.risk_buffer,
+      fixed_enablement_cost = S.fixed_enablement_cost,
+      net_annual_benefit = S.net_annual_benefit,
+      band = S.band,
+      decision = S.decision,
+      sufficiency_pass = S.sufficiency_pass,
+      top_drivers = S.top_drivers,
+      created_at = S.created_at
+    WHEN NOT MATCHED THEN INSERT ROW
+    """
 
-    errors = client.insert_rows_json(config.TABLE_RECOMMENDATIONS, [row])
+    client.query(
+        merge_query,
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("run_id", "STRING", run_id),
+            bigquery.ScalarQueryParameter("pf", "STRING", product_family),
+            bigquery.ScalarQueryParameter("volume", "INT64", annualized_volume),
+            bigquery.ScalarQueryParameter("replace_cost", "FLOAT64", avg_replace_unit_cost),
+            bigquery.ScalarQueryParameter("repair_cost", "FLOAT64", avg_repair_cost),
+            bigquery.ScalarQueryParameter("delta", "FLOAT64", per_unit_delta),
+            bigquery.ScalarQueryParameter("gross", "FLOAT64", gross_annual_savings),
+            bigquery.ScalarQueryParameter("risk", "FLOAT64", risk_buffer),
+            bigquery.ScalarQueryParameter("fixed", "FLOAT64", fixed_enablement_cost),
+            bigquery.ScalarQueryParameter("net", "FLOAT64", net_benefit_usd),
+            bigquery.ScalarQueryParameter("band", "STRING", band),
+            bigquery.ScalarQueryParameter("decision", "STRING", decision),
+            bigquery.ArrayQueryParameter("drivers", "STRING", top_drivers),
+        ])
+    ).result()
 
-    if errors:
-        return {"error": f"BigQuery insert failed: {errors}"}
-
-    return {"status": "success", "run_id": run_id, "product_family": product_family}
+    return {"status": "success", "run_id": run_id, "product_family": product_family, "band": band}
 
 
 # ──────────────────────────────────────────────
@@ -157,29 +226,47 @@ def bq_write_missing_data_escalation(
     reason: str,
     severity: str = "MED"
 ) -> dict:
-    """Record missing/insufficient data. The agent must not guess."""
-    row = {
-        "run_id": run_id,
-        "product_family": product_family,
-        "missing_fields": missing_fields,
-        "reason": reason,
-        "severity": severity,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    """
+    Record insufficient data AND remove any stale opportunity_scores row
+    for this family so the dashboard doesn't show a zombie recommendation.
+    """
+    # 1. Insert escalation row
+    client.query(
+        f"""
+        INSERT INTO `{config.TABLE_ESCALATIONS}`
+        (run_id, product_family, missing_fields, reason, severity, created_at)
+        VALUES (@run_id, @pf, @fields, @reason, @severity, CURRENT_TIMESTAMP())
+        """,
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("run_id", "STRING", run_id),
+            bigquery.ScalarQueryParameter("pf", "STRING", product_family),
+            bigquery.ArrayQueryParameter("fields", "STRING", missing_fields),
+            bigquery.ScalarQueryParameter("reason", "STRING", reason),
+            bigquery.ScalarQueryParameter("severity", "STRING", severity),
+        ])
+    ).result()
 
-    errors = client.insert_rows_json(config.TABLE_ESCALATIONS, [row])
-
-    if errors:
-        return {"error": f"BigQuery insert failed: {errors}"}
+    # 2. Remove any existing opportunity_scores row for this family
+    client.query(
+        f"DELETE FROM `{config.TABLE_SCORES}` WHERE product_family = @pf",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("pf", "STRING", product_family),
+        ])
+    ).result()
 
     return {"status": "escalated", "run_id": run_id, "product_family": product_family}
 
+def bq_count_escalations() -> int:
+    """Count distinct product families currently in the escalations table."""
+    query = f"SELECT COUNT(DISTINCT product_family) AS n FROM `{config.TABLE_ESCALATIONS}`"
+    row = next(iter(client.query(query).result()))
+    return int(row["n"])
 
 # ──────────────────────────────────────────────
 # HELPER: List all scoreable product families
 # ──────────────────────────────────────────────
 
-def bq_list_product_families(limit: int = 50) -> list:
+def bq_list_product_families(limit: int = 200) -> list:
     """List product families with their volume and data coverage."""
     query = f"""
     SELECT
@@ -197,3 +284,38 @@ def bq_list_product_families(limit: int = 50) -> list:
     """
     results = client.query(query).result()
     return [dict(row) for row in results]
+
+
+# ──────────────────────────────────────────────
+# HELPER: Get all opportunity scores (for dashboard)
+# ──────────────────────────────────────────────
+
+def bq_get_all_scores() -> list:
+    """Fetch the latest opportunity scores for the dashboard."""
+    query = f"""
+    SELECT
+      product_family,
+      annualized_volume,
+      avg_replace_unit_cost,
+      avg_repair_cost,
+      per_unit_delta,
+      gross_annual_savings,
+      risk_buffer,
+      net_annual_benefit,
+      band,
+      decision,
+      sufficiency_pass,
+      top_drivers,
+      created_at
+    FROM `{config.TABLE_SCORES}`
+    ORDER BY net_annual_benefit DESC
+    """
+    results = client.query(query).result()
+    rows = []
+    for row in results:
+        r = dict(row)
+        # Convert datetime to string for JSON serialization
+        if r.get("created_at"):
+            r["created_at"] = r["created_at"].isoformat()
+        rows.append(r)
+    return rows

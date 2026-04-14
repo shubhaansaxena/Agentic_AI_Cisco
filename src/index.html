@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cisco RMA — Repair vs Replace Agent</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'DM Sans', sans-serif; background: #f8f9fa; color: #1a1a1a; }
+
+  .header {
+    background: #fff; border-bottom: 1px solid #e5e7eb; padding: 16px 32px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header .subtitle { font-size: 13px; color: #6b7280; }
+  .header .badge {
+    background: #e1f5ee; color: #0f6e56; font-size: 11px; font-weight: 600;
+    padding: 4px 10px; border-radius: 20px;
+  }
+
+  .container { max-width: 1280px; margin: 0 auto; padding: 24px 32px; }
+
+  .view-toggle {
+    display: inline-flex; background: #fff; border-radius: 10px; border: 1px solid #e5e7eb;
+    padding: 4px; margin-bottom: 20px;
+  }
+  .view-toggle button {
+    padding: 8px 22px; border: none; background: transparent; font-size: 13px;
+    font-family: 'DM Sans', sans-serif; font-weight: 500; cursor: pointer;
+    color: #6b7280; border-radius: 7px; transition: all 0.15s;
+  }
+  .view-toggle button.active { background: #1a1a1a; color: #fff; }
+
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .metric-card { background: #fff; border-radius: 10px; padding: 20px; border: 1px solid #e5e7eb; }
+  .metric-card .label { font-size: 12px; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric-card .value { font-size: 28px; font-weight: 600; }
+  .metric-card .sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+  .charts-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .chart-card { background: #fff; border-radius: 10px; padding: 20px; border: 1px solid #e5e7eb; }
+  .chart-card h3 { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+  .chart-card .chart-sub { font-size: 12px; color: #6b7280; margin-bottom: 16px; }
+
+  .evaluate-section { background: #fff; border-radius: 10px; padding: 20px; border: 1px solid #e5e7eb; margin-bottom: 24px; }
+  .evaluate-section h3 { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+  .evaluate-section p { font-size: 13px; color: #6b7280; margin-bottom: 12px; }
+
+  .search-container { position: relative; flex: 1; max-width: 500px; }
+  .search-input {
+    width: 100%; padding: 10px 14px 10px 38px; border-radius: 8px; border: 1px solid #d1d5db;
+    font-size: 14px; font-family: 'DM Sans', sans-serif; background: #fff;
+  }
+  .search-input:focus { outline: none; border-color: #0f6e56; box-shadow: 0 0 0 3px rgba(15,110,86,0.1); }
+  .search-icon {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    width: 16px; height: 16px; color: #9ca3af; pointer-events: none;
+  }
+
+  .search-results {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: #fff;
+    border: 1px solid #e5e7eb; border-radius: 8px; max-height: 320px; overflow-y: auto;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.08); z-index: 50; display: none;
+  }
+  .search-results.show { display: block; }
+  .search-result-item {
+    padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #f3f4f6;
+    font-size: 13px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-item:hover, .search-result-item.highlighted { background: #f9fafb; }
+  .search-result-item .name { font-weight: 500; }
+  .search-result-item .meta { font-size: 11px; color: #9ca3af; }
+  .search-empty { padding: 20px; text-align: center; color: #9ca3af; font-size: 13px; }
+
+  .evaluate-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .evaluate-row button {
+    padding: 10px 24px; border-radius: 8px; border: none; font-size: 14px;
+    font-family: 'DM Sans', sans-serif; font-weight: 500; cursor: pointer;
+    background: #0f6e56; color: #fff; transition: background 0.2s;
+  }
+  .evaluate-row button:hover { background: #085041; }
+  .evaluate-row button:disabled { background: #9ca3af; cursor: not-allowed; }
+
+  .selected-badge {
+    display: none; padding: 6px 12px; background: #f3f4f6; border-radius: 8px;
+    font-size: 13px; align-items: center; gap: 8px;
+  }
+  .selected-badge.show { display: inline-flex; }
+  .selected-badge .clear { cursor: pointer; color: #9ca3af; font-weight: 600; }
+  .selected-badge .clear:hover { color: #1a1a1a; }
+
+  .result-box { margin-top: 16px; padding: 16px; border-radius: 8px; display: none; border: 1px solid #e5e7eb; background: #f9fafb; }
+  .result-box.show { display: block; }
+  .result-box .result-header { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .result-box .result-band { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .result-box .explanation { font-size: 14px; line-height: 1.6; color: #374151; }
+
+  .spinner { display: none; width: 20px; height: 20px; border: 2px solid #d1d5db; border-top-color: #0f6e56; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  .spinner.show { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .table-section { background: #fff; border-radius: 10px; border: 1px solid #e5e7eb; overflow: hidden; }
+  .table-header { padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .table-header h3 { font-size: 14px; font-weight: 500; }
+  .table-filters-wrap { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .table-search {
+    padding: 6px 12px; border-radius: 20px; border: 1px solid #d1d5db; font-size: 12px;
+    font-family: 'DM Sans', sans-serif; width: 200px;
+  }
+  .table-search:focus { outline: none; border-color: #0f6e56; }
+  .filters { display: flex; gap: 6px; }
+  .filters button {
+    padding: 5px 14px; border-radius: 20px; border: 1px solid #d1d5db; font-size: 12px;
+    font-family: 'DM Sans', sans-serif; cursor: pointer; background: #fff; color: #374151;
+  }
+  .filters button.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  .filters button:hover:not(.active) { background: #f3f4f6; }
+
+  .table-wrap { max-height: 600px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 500;
+    color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;
+    background: #f9fafb; border-bottom: 1px solid #e5e7eb;
+    position: sticky; top: 0;
+  }
+  thead th.right { text-align: right; }
+  tbody td { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #f3f4f6; }
+  tbody td.right { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: #f9fafb; }
+
+  .band-pill { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .band-green { background: #e1f5ee; color: #0f6e56; }
+  .band-yellow { background: #faeeda; color: #854f0b; }
+  .band-red { background: #fcebeb; color: #a32d2d; }
+  .delta-pos { color: #0f6e56; }
+  .delta-neg { color: #a32d2d; }
+  .family-tag { font-size: 11px; color: #6b7280; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Repair vs. Replace — Cost optimization agent</h1>
+    <div class="subtitle">Agent H5 · Cisco RMA Agentic AI</div>
+  </div>
+  <div class="badge">POC — Spring 2026</div>
+</div>
+
+<div class="container">
+
+  <div class="view-toggle">
+    <button id="toggle-part" class="active" onclick="switchView('part')">By part</button>
+    <button id="toggle-family" onclick="switchView('family')">By product family</button>
+  </div>
+
+  <div class="metrics" id="metricsRow">
+    <div class="metric-card">
+      <div class="label">Total net savings</div>
+      <div class="value" id="m-savings">—</div>
+      <div class="sub" id="m-savings-sub">across all green-band items</div>
+    </div>
+    <div class="metric-card">
+      <div class="label" id="m-total-label">Parts scored</div>
+      <div class="value" id="m-total">—</div>
+      <div class="sub" id="m-total-sub">individual parts evaluated</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Repair candidates</div>
+      <div class="value" id="m-green" style="color: #0f6e56;">—</div>
+      <div class="sub">green band — recommended</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Escalations</div>
+      <div class="value" id="m-esc" style="color: #a32d2d;">—</div>
+      <div class="sub">insufficient data — not scored</div>
+    </div>
+  </div>
+
+  <div class="evaluate-section">
+    <h3 id="eval-title">Evaluate a part</h3>
+    <p id="eval-desc">Search for a part ID and click evaluate. The agent will query costs, compute the net annual benefit, and write a recommendation.</p>
+    <div class="evaluate-row">
+      <div class="search-container">
+        <svg class="search-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input type="text" id="searchInput" class="search-input" placeholder="Search by part ID or family..." autocomplete="off">
+        <div class="search-results" id="searchResults"></div>
+      </div>
+      <div class="selected-badge" id="selectedBadge">
+        <span id="selectedText"></span>
+        <span class="clear" onclick="clearSelection()">✕</span>
+      </div>
+      <button id="evalBtn" onclick="evaluateItem()">Evaluate</button>
+      <div class="spinner" id="evalSpinner"></div>
+    </div>
+    <div class="result-box" id="resultBox">
+      <div class="result-header">
+        <strong id="resultName"></strong>
+        <span class="band-pill" id="resultBand"></span>
+      </div>
+      <div class="explanation" id="resultExplanation"></div>
+    </div>
+  </div>
+
+  <div class="charts-row" id="chartsRow">
+    <div class="chart-card">
+      <h3 id="top-chart-title">Top 10 repair candidates by savings</h3>
+      <div class="chart-sub" id="top-chart-sub">Annual net benefit from repair</div>
+      <div style="position: relative; width: 100%; height: 340px;">
+        <canvas id="topChart"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <h3>Band distribution</h3>
+      <div class="chart-sub">All scored items</div>
+      <div style="position: relative; width: 100%; height: 340px;">
+        <canvas id="distChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-section">
+    <div class="table-header">
+      <h3 id="table-title">All scored parts</h3>
+      <div class="table-filters-wrap">
+        <input type="text" id="tableSearch" class="table-search" placeholder="Filter table..." oninput="applyTableFilters()">
+        <div class="filters">
+          <button class="active" onclick="filterTable('ALL', this)">All</button>
+          <button onclick="filterTable('GREEN', this)">Repair</button>
+          <button onclick="filterTable('YELLOW', this)">Review</button>
+          <button onclick="filterTable('RED', this)">Replace</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody">
+          <tr><td colspan="8" style="text-align: center; padding: 40px; color: #9ca3af;">Loading data...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let currentView = "part";
+let currentFilter = "ALL";
+let allScores = [];
+let items = [];
+let selectedItem = null;
+let lastEscalationCount = null;
+let topChartInstance = null;
+let distChartInstance = null;
+let highlightedIdx = -1;
+
+function fmtCurrency(n) {
+  if (n == null) return "—";
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
+  if (abs >= 1e3) return sign + "$" + Math.round(abs / 1e3).toLocaleString() + "K";
+  return sign + "$" + Math.round(abs).toLocaleString();
+}
+
+function bandPill(band) {
+  const map = {
+    GREEN:  { cls: "band-green",  label: "Repair" },
+    YELLOW: { cls: "band-yellow", label: "Review" },
+    RED:    { cls: "band-red",    label: "Replace" },
+  };
+  const b = map[band] || { cls: "band-red", label: band };
+  return '<span class="band-pill ' + b.cls + '">' + b.label + "</span>";
+}
+
+// ─── Search dropdown logic ───
+function renderSearchResults(query) {
+  const results = document.getElementById("searchResults");
+  if (!query || query.length < 1) {
+    results.classList.remove("show");
+    return;
+  }
+
+  const q = query.toLowerCase();
+  const keyField = currentView === "family" ? "product_family" : "part_id";
+
+  const matches = items.filter(item => {
+    const key = (item[keyField] || "").toLowerCase();
+    const family = (item.product_family || "").toLowerCase();
+    return key.includes(q) || family.includes(q);
+  }).slice(0, 15);
+
+  if (matches.length === 0) {
+    results.innerHTML = '<div class="search-empty">No matches found</div>';
+    results.classList.add("show");
+    return;
+  }
+
+  results.innerHTML = matches.map((item, idx) => {
+    const name = item[keyField];
+    const vol = item.annualized_volume || 0;
+    const meta = currentView === "family"
+      ? 'vol ' + vol.toLocaleString() + '/yr'
+      : item.product_family + ' · vol ' + vol.toLocaleString() + '/yr';
+    return '<div class="search-result-item" data-value="' + name + '" data-idx="' + idx + '" onclick="selectSearchItem(\'' + name.replace(/'/g, "\\'") + '\')">' +
+      '<span class="name">' + name + '</span>' +
+      '<span class="meta">' + meta + '</span>' +
+    '</div>';
+  }).join('');
+  results.classList.add("show");
+  highlightedIdx = -1;
+}
+
+function selectSearchItem(value) {
+  selectedItem = value;
+  document.getElementById("searchInput").value = "";
+  document.getElementById("searchResults").classList.remove("show");
+  document.getElementById("selectedText").textContent = value;
+  document.getElementById("selectedBadge").classList.add("show");
+}
+
+function clearSelection() {
+  selectedItem = null;
+  document.getElementById("selectedBadge").classList.remove("show");
+  document.getElementById("searchInput").focus();
+}
+
+// ─── Table rendering ───
+function renderTableHead() {
+  const head = document.getElementById("tableHead");
+  if (currentView === "family") {
+    head.innerHTML = '<tr>' +
+      '<th>Product family</th>' +
+      '<th>Band</th>' +
+      '<th>Decision</th>' +
+      '<th class="right">Volume/yr</th>' +
+      '<th class="right">Replace cost</th>' +
+      '<th class="right">Repair cost</th>' +
+      '<th class="right">Unit delta</th>' +
+      '<th class="right">Net benefit/yr</th>' +
+    '</tr>';
+  } else {
+    head.innerHTML = '<tr>' +
+      '<th>Part ID</th>' +
+      '<th>Family</th>' +
+      '<th>Band</th>' +
+      '<th class="right">Volume/yr</th>' +
+      '<th class="right">Replace cost</th>' +
+      '<th class="right">Repair cost</th>' +
+      '<th class="right">Unit delta</th>' +
+      '<th class="right">Net benefit/yr</th>' +
+    '</tr>';
+  }
+}
+
+function applyTableFilters() {
+  const tb = document.getElementById("tableBody");
+  const searchQ = document.getElementById("tableSearch").value.toLowerCase();
+
+  let filtered = currentFilter === "ALL" ? allScores : allScores.filter(r => r.band === currentFilter);
+
+  if (searchQ) {
+    filtered = filtered.filter(r => {
+      const id = currentView === "family" ? (r.product_family || "") : (r.part_id || "");
+      const fam = r.product_family || "";
+      return id.toLowerCase().includes(searchQ) || fam.toLowerCase().includes(searchQ);
+    });
+  }
+
+  if (filtered.length === 0) {
+    tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#9ca3af;">No results</td></tr>';
+    return;
+  }
+
+  tb.innerHTML = filtered.map(r => {
+    const delta = (r.avg_replace_unit_cost || 0) - (r.avg_repair_cost || 0);
+    const deltaClass = delta >= 0 ? "delta-pos" : "delta-neg";
+
+    if (currentView === "family") {
+      return '<tr>' +
+        '<td style="font-weight:500;">' + r.product_family + '</td>' +
+        '<td>' + bandPill(r.band) + '</td>' +
+        '<td style="color:#6b7280;">' + r.decision + '</td>' +
+        '<td class="right">' + (r.annualized_volume || 0).toLocaleString() + '</td>' +
+        '<td class="right">' + fmtCurrency(r.avg_replace_unit_cost) + '</td>' +
+        '<td class="right">' + fmtCurrency(r.avg_repair_cost) + '</td>' +
+        '<td class="right ' + deltaClass + '">' + (delta >= 0 ? "+" : "") + fmtCurrency(delta) + '</td>' +
+        '<td class="right" style="font-weight:500;">' + fmtCurrency(r.net_annual_benefit) + '</td>' +
+      '</tr>';
+    } else {
+      return '<tr>' +
+        '<td style="font-weight:500;">' + r.part_id + '</td>' +
+        '<td class="family-tag">' + (r.product_family || '—') + '</td>' +
+        '<td>' + bandPill(r.band) + '</td>' +
+        '<td class="right">' + (r.annualized_volume || 0).toLocaleString() + '</td>' +
+        '<td class="right">' + fmtCurrency(r.avg_replace_unit_cost) + '</td>' +
+        '<td class="right">' + fmtCurrency(r.avg_repair_cost) + '</td>' +
+        '<td class="right ' + deltaClass + '">' + (delta >= 0 ? "+" : "") + fmtCurrency(delta) + '</td>' +
+        '<td class="right" style="font-weight:500;">' + fmtCurrency(r.net_annual_benefit) + '</td>' +
+      '</tr>';
+    }
+  }).join('');
+}
+
+function filterTable(band, btn) {
+  currentFilter = band;
+  document.querySelectorAll('.filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyTableFilters();
+}
+
+// ─── Charts ───
+function renderCharts() {
+  if (topChartInstance) { topChartInstance.destroy(); topChartInstance = null; }
+  if (distChartInstance) { distChartInstance.destroy(); distChartInstance = null; }
+
+  const green = allScores.filter(d => d.band === "GREEN").sort((a, b) => b.net_annual_benefit - a.net_annual_benefit);
+  const top10 = green.slice(0, 10);
+
+  if (top10.length > 0) {
+    const labelKey = currentView === "family" ? "product_family" : "part_id";
+
+    topChartInstance = new Chart(document.getElementById("topChart"), {
+      type: "bar",
+      data: {
+        labels: top10.map(d => d[labelKey]),
+        datasets: [{ data: top10.map(d => d.net_annual_benefit), backgroundColor: "#1D9E75", borderRadius: 4, barPercentage: 0.7 }]
+      },
+      options: {
+        indexAxis: "y", responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ' Net benefit: ' + fmtCurrency(ctx.parsed.x)
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: "rgba(0,0,0,0.05)" }, ticks: { font: { size: 11 }, callback: v => fmtCurrency(v) } },
+          y: { grid: { display: false }, ticks: { font: { size: 11 } } }
+        }
+      }
+    });
+  }
+
+  const gC = allScores.filter(d => d.band === "GREEN").length;
+  const yC = allScores.filter(d => d.band === "YELLOW").length;
+  const rC = allScores.filter(d => d.band === "RED").length;
+
+  distChartInstance = new Chart(document.getElementById("distChart"), {
+    type: "doughnut",
+    data: {
+      labels: ["Repair (" + gC + ")", "Review (" + yC + ")", "Replace (" + rC + ")"],
+      datasets: [{ data: [gC, yC, rC], backgroundColor: ["#1D9E75", "#EF9F27", "#E24B4A"], borderWidth: 0, spacing: 2 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "65%",
+      plugins: { legend: { position: "bottom", labels: { padding: 16, font: { size: 12 } } } }
+    }
+  });
+}
+
+function updateMetrics(escalationCount) {
+  const green = allScores.filter(d => d.band === "GREEN");
+  const totalSavings = green.reduce((s, d) => s + (d.net_annual_benefit || 0), 0);
+  document.getElementById("m-savings").textContent = fmtCurrency(totalSavings);
+  document.getElementById("m-total").textContent = allScores.length;
+  document.getElementById("m-green").textContent = green.length;
+
+  if (escalationCount != null) lastEscalationCount = escalationCount;
+  document.getElementById("m-esc").textContent = lastEscalationCount != null ? lastEscalationCount : "—";
+
+  if (currentView === "family") {
+    document.getElementById("m-total-label").textContent = "Families scored";
+    document.getElementById("m-total-sub").textContent = "product families evaluated";
+  } else {
+    document.getElementById("m-total-label").textContent = "Parts scored";
+    document.getElementById("m-total-sub").textContent = "individual parts evaluated";
+  }
+}
+
+async function fetchEscalationCount() {
+  try {
+    const res = await fetch(API_BASE + "/escalations/count");
+    const data = await res.json();
+    return data.count;
+  } catch (e) { return null; }
+}
+
+// ─── View switching ───
+async function switchView(view) {
+  if (view === currentView) return;
+  currentView = view;
+  currentFilter = "ALL";
+  selectedItem = null;
+  document.getElementById("selectedBadge").classList.remove("show");
+  document.getElementById("searchInput").value = "";
+  document.getElementById("tableSearch").value = "";
+
+  document.getElementById("toggle-part").classList.toggle("active", view === "part");
+  document.getElementById("toggle-family").classList.toggle("active", view === "family");
+  document.querySelectorAll('.filters button').forEach((b, i) => b.classList.toggle('active', i === 0));
+
+  if (view === "family") {
+    document.getElementById("eval-title").textContent = "Evaluate a product family";
+    document.getElementById("eval-desc").textContent = "Search for a product family and click evaluate. The agent will query costs, compute the net annual benefit, and write a recommendation.";
+    document.getElementById("table-title").textContent = "All scored product families";
+    document.getElementById("searchInput").placeholder = "Search by family name...";
+  } else {
+    document.getElementById("eval-title").textContent = "Evaluate a part";
+    document.getElementById("eval-desc").textContent = "Search for a part ID and click evaluate. The agent will query costs, compute the net annual benefit, and write a recommendation.";
+    document.getElementById("table-title").textContent = "All scored parts";
+    document.getElementById("searchInput").placeholder = "Search by part ID or family...";
+  }
+
+  await loadData();
+}
+
+async function loadData() {
+  try {
+    const listEndpoint = currentView === "family" ? "/families?limit=500" : "/parts?limit=2000";
+    const scoresEndpoint = currentView === "family" ? "/scores" : "/scores-part";
+
+    const listRes = await fetch(API_BASE + listEndpoint);
+    const listData = await listRes.json();
+    items = listData[currentView === "family" ? "families" : "parts"] || [];
+
+    const scoresRes = await fetch(API_BASE + scoresEndpoint);
+    const scoresData = await scoresRes.json();
+    allScores = (scoresData.scores || []).sort((a, b) => (b.net_annual_benefit || 0) - (a.net_annual_benefit || 0));
+
+    const escCount = await fetchEscalationCount();
+
+    renderTableHead();
+    updateMetrics(escCount);
+    applyTableFilters();
+    renderCharts();
+  } catch (e) {
+    console.error("Failed to load data:", e);
+    document.getElementById("tableBody").innerHTML =
+      '<tr><td colspan="8" style="text-align:center;padding:40px;color:#9ca3af;">Could not load data.</td></tr>';
+  }
+}
+
+async function evaluateItem() {
+  if (!selectedItem) {
+    alert("Please search and select an item first");
+    return;
+  }
+
+  const btn = document.getElementById("evalBtn");
+  const spinner = document.getElementById("evalSpinner");
+  const resultBox = document.getElementById("resultBox");
+
+  btn.disabled = true;
+  btn.textContent = "Evaluating...";
+  spinner.classList.add("show");
+  resultBox.classList.remove("show");
+
+  try {
+    const endpoint = currentView === "family" ? "/evaluate" : "/evaluate-part";
+    const body = currentView === "family"
+      ? { product_family: selectedItem }
+      : { part_id: selectedItem };
+
+    const res = await fetch(API_BASE + endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+
+    if (res.ok) {
+      document.getElementById("resultName").textContent = data.product_family || data.identifier || selectedItem;
+      document.getElementById("resultExplanation").textContent = data.explanation;
+
+      const band = data.band || "GREEN";
+      const bandMap = { GREEN: "band-green", YELLOW: "band-yellow", RED: "band-red", ESCALATED: "band-red" };
+      const bandLabelMap = { GREEN: "Repair", YELLOW: "Review", RED: "Replace", ESCALATED: "Insufficient data" };
+      const pill = document.getElementById("resultBand");
+      pill.className = "band-pill " + (bandMap[band] || "band-red");
+      pill.textContent = bandLabelMap[band] || band;
+
+      resultBox.classList.add("show");
+
+      // Refresh
+      try {
+        const scoresEndpoint = currentView === "family" ? "/scores" : "/scores-part";
+        const scoresRes = await fetch(API_BASE + scoresEndpoint);
+        const scoresData = await scoresRes.json();
+        allScores = (scoresData.scores || []).sort((a, b) => (b.net_annual_benefit || 0) - (a.net_annual_benefit || 0));
+        const escCount = await fetchEscalationCount();
+        updateMetrics(escCount);
+        applyTableFilters();
+        renderCharts();
+      } catch (e) {}
+    } else {
+      document.getElementById("resultName").textContent = selectedItem;
+      document.getElementById("resultExplanation").textContent = "Error: " + (data.detail || "Unknown error");
+      document.getElementById("resultBand").className = "band-pill band-red";
+      document.getElementById("resultBand").textContent = "Error";
+      resultBox.classList.add("show");
+    }
+  } catch (e) {
+    document.getElementById("resultName").textContent = selectedItem;
+    document.getElementById("resultExplanation").textContent = "Error: " + e.message;
+    document.getElementById("resultBand").className = "band-pill band-red";
+    document.getElementById("resultBand").textContent = "Error";
+    resultBox.classList.add("show");
+  }
+
+  btn.disabled = false;
+  btn.textContent = "Evaluate";
+  spinner.classList.remove("show");
+}
+
+// ─── Search input events ───
+document.getElementById("searchInput").addEventListener("input", (e) => {
+  renderSearchResults(e.target.value);
+});
+
+document.getElementById("searchInput").addEventListener("keydown", (e) => {
+  const results = document.getElementById("searchResults");
+  const items = results.querySelectorAll(".search-result-item");
+  if (!items.length) return;
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    highlightedIdx = Math.min(highlightedIdx + 1, items.length - 1);
+    items.forEach((it, i) => it.classList.toggle("highlighted", i === highlightedIdx));
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    highlightedIdx = Math.max(highlightedIdx - 1, 0);
+    items.forEach((it, i) => it.classList.toggle("highlighted", i === highlightedIdx));
+  } else if (e.key === "Enter" && highlightedIdx >= 0) {
+    e.preventDefault();
+    const value = items[highlightedIdx].getAttribute("data-value");
+    selectSearchItem(value);
+  } else if (e.key === "Escape") {
+    results.classList.remove("show");
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".search-container")) {
+    document.getElementById("searchResults").classList.remove("show");
+  }
+});
+
+loadData();
+</script>
+</body>
+</html>

@@ -63,7 +63,7 @@ score_func = FunctionDeclaration(
 
 write_rec_func = FunctionDeclaration(
     name="bq_write_recommendation",
-    description="Write a recommendation (REPAIR/REPLACE/REVIEW) to BigQuery with an explanation grounded in the scoring results.",
+    description="Write a recommendation to BigQuery. Pass ALL fields from score_net_annual_benefit plus the cost context so the dashboard can display it.",
     parameters={
         "type": "object",
         "properties": {
@@ -72,13 +72,20 @@ write_rec_func = FunctionDeclaration(
             "decision": {"type": "string", "enum": ["REPAIR", "REPLACE", "REVIEW"]},
             "band": {"type": "string", "enum": ["GREEN", "YELLOW", "RED"]},
             "net_benefit_usd": {"type": "number"},
-            "top_drivers": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
+            "top_drivers": {"type": "array", "items": {"type": "string"}},
             "explanation": {"type": "string"},
+            "annualized_volume": {"type": "integer"},
+            "avg_replace_unit_cost": {"type": "number"},
+            "avg_repair_cost": {"type": "number"},
+            "per_unit_delta": {"type": "number"},
+            "gross_annual_savings": {"type": "number"},
+            "risk_buffer": {"type": "number"},
+            "fixed_enablement_cost": {"type": "number"},
         },
-        "required": ["run_id", "product_family", "decision", "band", "net_benefit_usd", "top_drivers", "explanation"],
+        "required": ["run_id", "product_family", "decision", "band", "net_benefit_usd",
+                     "top_drivers", "explanation", "annualized_volume",
+                     "avg_replace_unit_cost", "avg_repair_cost", "per_unit_delta",
+                     "gross_annual_savings", "risk_buffer"],
     },
 )
 
@@ -124,7 +131,10 @@ YOUR JOB:
    - Are replace and repair costs available?
 3. If data is INSUFFICIENT: call bq_write_missing_data_escalation and explain what's missing
 4. If data is SUFFICIENT: call score_net_annual_benefit with the values from step 1
-5. Call bq_write_recommendation with the scoring result and a plain-English explanation
+5. Call bq_write_recommendation with:
+   - The scoring result fields (net_benefit_usd, band, decision, top_drivers, per_unit_delta, gross_annual_savings, risk_buffer, fixed_enablement_cost)
+   - The cost context fields from step 1 (annualized_volume, avg_replace_unit_cost, avg_repair_cost)
+   - A plain-English explanation
 
 CRITICAL RULES:
 - NEVER invent or estimate cost numbers. Only use values returned by tools.
